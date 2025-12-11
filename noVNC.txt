@@ -1,3 +1,109 @@
+Opsi 2: Cara Paling Stabil/Pro (Pakai systemd)
+
+Sebagai mahasiswa informatika, cara ini lebih disarankan. Jika VNC crash, sistem bisa otomatis merestart-nya, dan log-nya tercatat rapi.
+
+1. Buat Service untuk VNC Buat file baru:
+Bash
+
+sudo nano /etc/systemd/system/vncserver@.service
+
+Paste kode berikut (Asumsi user kamu adalah pi):
+Ini, TOML
+
+[Unit]
+Description=Start TightVNC server at startup
+After=syslog.target network.target
+
+[Service]
+Type=forking
+User=pi
+Group=pi
+WorkingDirectory=/home/pi
+
+PIDFile=/home/pi/.vnc/%H:%i.pid
+ExecStartPre=-/usr/bin/vncserver -kill :%i > /dev/null 2>&1
+ExecStart=/usr/bin/vncserver -depth 24 -geometry 1280x720 :%i
+ExecStop=/usr/bin/vncserver -kill :%i
+
+[Install]
+WantedBy=multi-user.target
+
+Simpan dan keluar.
+
+2. Aktifkan Service VNC Kita enable untuk display :1:
+Bash
+
+sudo systemctl daemon-reload
+sudo systemctl enable vncserver@1.service
+sudo systemctl start vncserver@1.service
+
+3. Buat Service untuk Websockify Buat file baru:
+Bash
+
+sudo nano /etc/systemd/system/websockify.service
+
+Paste kode berikut (Sesuaikan path websockify kamu):
+Ini, TOML
+
+[Unit]
+Description=Websockify for NoVNC
+After=network.target vncserver@1.service
+
+[Service]
+Type=simple
+User=pi
+# Ganti baris di bawah sesuai lokasi websockify kamu
+ExecStart=/usr/bin/python3 /home/pi/novnc/utils/websockify.py --web /home/pi/novnc 6080 localhost:5901
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+
+Simpan dan keluar.
+
+4. Aktifkan Websockify
+Bash
+
+sudo systemctl enable websockify.service
+sudo systemctl start websockify.service
+
+Cara Cek Apakah Berhasil?
+
+Lakukan restart Raspberry Pi:
+Bash
+
+sudo reboot
+
+Tunggu sekitar 1 menit, lalu coba akses via browser atau cek di terminal:
+Bash
+
+systemctl status vncserver@1.service
+systemctl status websockify.service
+
+Kamu mau pakai cara yang mana? crontab (cepat) atau systemd (rapi)?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Baik — mari kita bikin **tutor paling detail dan serinci mungkin**, dari **nol sampai selesai**, dengan fokus pada **noVNC otomatis berjalan saat Raspberry Pi dinyalakan**, termasuk pengaturan multi-network (LAN + Wi-Fi), pengecekan dependency, service systemd, dan verifikasi.
 
 Gaya penjelasannya aku buat seperti mentor yang senang ngulik hal-hal teknis, tapi tetap santai dan manusiawi. Raspi itu kecil tapi keras kepala, jadi kita bener-bener perlu mengerti ritme kerjanya.
