@@ -1,62 +1,65 @@
-Oke, konteksmu **jelas dan sangat masuk akal untuk environment Raspberry Pi produksi** 👍
-Targetmu adalah:
+Baik. Kita fokus **tujuan akhirnya jelas**:
+**setiap Raspberry Pi 3 selesai boot → VNC + noVNC (websockify) otomatis jalan → bisa langsung diakses via browser tanpa perintah manual.**
 
-> **Setiap Raspberry Pi baru boot → VNC + noVNC (websockify) langsung jalan otomatis tanpa perlu manual command.**
-
-Tutorial yang kamu kirim (Maple Systems) **sudah benar secara konsep**, tapi memang **belum “production-ready” kalau tidak dilengkapi systemd autostart**. Di bawah ini aku susun **versi rapi, aman, dan stabil** khusus untuk kebutuhanmu.
+Di bawah ini saya rangkum **versi rapi, production-ready**, dan **sejalan dengan tutorial Maple Systems** yang kamu lampirkan, tetapi disesuaikan untuk **auto-start saat boot**.
 
 ---
 
-## Arsitektur yang Kita Tuju (PENTING)
+## 1. Arsitektur yang Perlu Dipahami (Penting)
 
-Sebelum masuk langkah, samakan mental model dulu:
+Sebelum masuk teknis, luruskan dulu alurnya:
 
 ```
-[Boot Raspberry Pi]
-        ↓
-[systemd]
-        ↓
-[VNC Server (RealVNC / TightVNC)]
-        ↓
-[websockify + noVNC]
-        ↓
-[Browser: http://IP:6080]
+Boot Raspberry Pi
+ ├─ systemd start VNC Server (desktop)
+ └─ systemd start noVNC + websockify
+        └─ expose VNC via WebSocket (port 6080)
+             └─ browser akses http://IP:6080
 ```
 
-**Artinya:**
+Artinya **ada 2 komponen utama**:
 
-* VNC **HARUS hidup dulu**
-* Baru noVNC (websockify) jadi proxy ke browser
+1. **VNC Server** (RealVNC / TightVNC / TigerVNC)
+2. **noVNC + websockify** (web proxy)
 
 ---
 
-## STEP 1 — Pastikan VNC Server Auto-Start (WAJIB)
+## 2. Pastikan VNC Server Auto-Start (WAJIB)
 
-### Cek status VNC
+### 2.1 Aktifkan VNC bawaan Raspberry Pi
+
+```bash
+sudo raspi-config
+```
+
+Masuk:
+
+```
+Interface Options → VNC → Enable
+```
+
+Verifikasi:
 
 ```bash
 systemctl status vncserver-x11-serviced
 ```
 
-Kalau belum aktif:
+Harusnya:
 
-```bash
-sudo systemctl enable vncserver-x11-serviced
-sudo systemctl start vncserver-x11-serviced
+```
+Active: active (running)
 ```
 
-Atau via GUI:
+Catatan penting:
 
-```bash
-sudo raspi-config
-Interface Options → VNC → Enable
-```
+* **RealVNC bawaan Pi sudah auto-start by default**
+* Tidak perlu bikin service tambahan untuk VNC
 
 ---
 
-## STEP 2 — Install noVNC + websockify (sekali saja)
+## 3. Install noVNC + websockify
 
-Ikuti versi **stabil** (hindari clone random):
+Ikuti pendekatan Maple Systems (valid dan aman):
 
 ```bash
 sudo apt update
@@ -69,55 +72,49 @@ Lokasi default:
 /usr/share/novnc
 ```
 
-Cek manual dulu:
+Test manual dulu (sekali saja):
 
 ```bash
-websockify --version
+websockify --web=/usr/share/novnc/ 6080 localhost:5900
 ```
 
----
-
-## STEP 3 — Test Manual (sekali saja, VALIDASI)
-
-Sebelum bikin auto-start, **pastikan ini jalan manual**:
-
-```bash
-websockify \
-  --web=/usr/share/novnc/ \
-  6080 localhost:5900
-```
-
-Lalu buka browser:
+Buka browser:
 
 ```
 http://IP_RASPBERRY:6080
 ```
 
-Kalau ini **sukses**, baru lanjut.
+Kalau berhasil → lanjut ke auto-start.
 
 ---
 
-## STEP 4 — Buat systemd Service (INI KUNCI UTAMA)
+## 4. Membuat systemd Service untuk noVNC (INTI SOLUSI)
 
-### Buat file service
+Ini bagian terpenting agar **otomatis jalan saat boot**.
+
+---
+
+### 4.1 Buat file service
 
 ```bash
 sudo nano /etc/systemd/system/novnc.service
 ```
 
-### ISI FILE (PAKAI INI)
+Isi **FULL & AMAN** seperti ini:
 
 ```ini
 [Unit]
-Description=noVNC Web Interface
+Description=noVNC WebSocket Proxy
 After=network.target vncserver-x11-serviced.service
-Wants=vncserver-x11-serviced.service
+Requires=vncserver-x11-serviced.service
 
 [Service]
 Type=simple
 User=pi
+WorkingDirectory=/usr/share/novnc
 ExecStart=/usr/bin/websockify \
   --web=/usr/share/novnc/ \
+  --wrap-mode=ignore \
   6080 localhost:5900
 Restart=always
 RestartSec=5
@@ -126,15 +123,20 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-**Penjelasan singkat (penting):**
+**Penjelasan kritis (biar kamu paham, bukan sekadar copy):**
 
-* `After=` → pastikan network + VNC sudah hidup
-* `Restart=always` → kalau crash, auto hidup lagi
-* `User=pi` → aman, tidak pakai root
+| Baris                | Fungsi                      |
+| -------------------- | --------------------------- |
+| After=network.target | Tunggu network siap         |
+| Requires=VNC service | Pastikan VNC hidup dulu     |
+| User=pi              | Jalan sebagai user desktop  |
+| WorkingDirectory     | Path static noVNC           |
+| ExecStart            | Websockify expose port 6080 |
+| Restart=always       | Auto-recover kalau crash    |
 
 ---
 
-## STEP 5 — Aktifkan Auto-Start
+### 4.2 Enable service (sekali saja)
 
 ```bash
 sudo systemctl daemon-reexec
@@ -149,81 +151,69 @@ Cek status:
 systemctl status novnc.service
 ```
 
+Harusnya:
+
+```
+Active: active (running)
+```
+
 ---
 
-## STEP 6 — TEST FINAL (REBOOT)
+## 5. Test Reboot (Validasi Akhir)
 
 ```bash
 sudo reboot
 ```
 
-Tunggu ±1 menit, lalu langsung buka:
+Setelah ±30–60 detik:
+
+Buka di laptop/PC:
 
 ```
 http://IP_RASPBERRY:6080
 ```
 
-👉 **Kalau langsung muncul desktop Raspberry Pi = DONE.**
+✔ Tanpa login SSH
+✔ Tanpa jalankan command
+✔ Langsung desktop Raspberry Pi
 
 ---
 
-## OPTIONAL (TAPI SANGAT DISARANKAN)
+## 6. Port & Security (Opsional tapi Direkomendasikan)
 
-### 1. Fix resolusi headless (tanpa monitor)
+### 6.1 Ganti port (kalau mau)
 
-Edit:
-
-```bash
-sudo nano /boot/config.txt
-```
-
-Tambahkan:
+Misal:
 
 ```ini
-hdmi_force_hotplug=1
-hdmi_group=2
-hdmi_mode=82
+6081 localhost:5900
 ```
 
-(Mode 82 = 1920×1080)
+### 6.2 Bind ke IP lokal saja (lebih aman)
+
+```ini
+ExecStart=/usr/bin/websockify \
+  --web=/usr/share/novnc/ \
+  127.0.0.1:6080 localhost:5900
+```
+
+Lalu expose via Nginx reverse proxy (kalau production).
 
 ---
 
-### 2. Security Basic (WAJIB kalau production)
+## 7. Checklist Akhir (Bisa Kamu Masukkan ke Laporan Magang)
 
-Minimal:
+* [x] VNC server auto-start via system service
+* [x] noVNC berjalan sebagai systemd service
+* [x] Akses remote via browser tanpa konfigurasi manual
+* [x] Mendukung remote debugging & deployment Raspberry Pi
+* [x] Cocok untuk headless device & embedded development
 
-* Password VNC di-set
-* noVNC di LAN saja (atau VPN)
-* Jangan expose langsung ke internet
+Kalau kamu mau, **next step yang bisa kita lakukan**:
 
----
+1. noVNC **full screen auto-connect**
+2. Autologin desktop Raspberry Pi
+3. Kunci ke satu aplikasi (kiosk-mode untuk ECBTest)
+4. Integrasi langsung ke **Fyne / Wails app startup**
 
-## Checklist Akhir (biar kamu yakin)
-
-| Item                   | Status |
-| ---------------------- | ------ |
-| VNC auto start         | ✅      |
-| noVNC jalan otomatis   | ✅      |
-| Bisa akses via browser | ✅      |
-| Tidak perlu SSH manual | ✅      |
-| Cocok untuk deployment | ✅      |
-
----
-
-## Relevansi ke Project ECBTest kamu
-
-Dengan setup ini:
-
-* Raspberry Pi **plug-and-play**
-* Operator tinggal buka browser
-* Cocok untuk **panel maintenance**, **factory floor**, atau **embedded HMI**
-
-Kalau kamu mau:
-
-* **auto-launch GUI ECBTest setelah boot**
-* **kiosk mode (full screen browser)**
-* **login tanpa password**
-* **integrasi dengan service Golang kamu**
-
-bilang saja, kita bisa naikkan levelnya ke **industrial-grade deployment**.
+Tinggal bilang mau lanjut ke arah mana.
